@@ -1,0 +1,3 @@
+sudo apt-get install module-assistant
+sudo module-assistant prepare
+

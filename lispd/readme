@@ -1,0 +1,35 @@
+sudo apt-get install libssl-dev
+
+sudo iptables -F
+sudo iptables -A FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss 1384
+sudo ip6tables -F
+sudo ip6tables -A FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss 1364
+
+add /etc/sysctl.conf:
+net.ipv4.ip_forward=1
+net.ipv6.conf.all.forwarding=1
+net.ipv6.conf.default.forwarding=1
+
+sudo sysctl -p
+
+add /etc/network/interfaces:
+auto eth0
+iface eth0 inet static
+	address 203.178.143.239
+	netmask 255.255.255.0
+	gateway 203.178.143.84
+
+iface eth0 inet6 static
+	address 2001:200:0:8801:203:178:143:239
+	netmask 64
+	gateway 2001:200:0:8801::1
+
+auto eth1
+iface eth1 inet static
+	address 153.16.68.129
+	netmask 255.255.255.128
+
+iface eth1 inet6 static
+	address 2001:200:0:88a6::1
+	netmask 64
+

@@ -1,0 +1,6 @@
+TODO:
+lispd)parse config
+lispd)improve control-plane 
+	(e.g. multiple rloc map-request)
+	(e.g. parse multiple rloc in map-reply)
+module)multiple rloc(weight and priority)
