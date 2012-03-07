@@ -1,94 +1,175 @@
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <netinet/ip.h>
+#include <netinet/ip6.h>
+#include <netinet/udp.h>
 #include <netdb.h>
-
-#include <stdlib.h>
-#include <string.h>
-
-#include <linux/types.h>
+#include <syslog.h>
 #include <time.h>
 
-#include "main.h"
 #include "utils.h"
+#include "request.h"
 #include "encapsulate.h"
+#include "main.h"
+#include "parser.h"
 
-void *ipv6_encap_map_request(unsigned int *packetsize, void *buf, int size, void *saddr, void *daddr){
-	struct lisp_header6 *h;
-	char  *packet = (char *)malloc(size + sizeof(struct lisp_header6));
-	memset(packet, 0, size + sizeof(struct lisp_header6));
-	
-	memcpy(packet + sizeof(struct lisp_header6), buf, size);
-	
-	h = (struct lisp_header6 *)packet;
 
-	h->TYPE = 8;
-	h->RESERVED = 0;
-	
-	h->VERSION = 6;
-	h->TRAFFIC_CLASS = 0xE0;
-	h->FLOW_LABEL = 0;
-	h->PAYLOAD_LEN = size + 8;
-	h->HOP_LIMIT = 64;
-	h->NEXT_HEADER = 0x11;
+int create_lisp_header(char *buf){
+	struct lisp_hdr *lisp = (struct lisp_hdr *)buf;
 
-	h->SOURCE_PORT = port_num;
-	h->DEST_PORT = 4342;
-	h->UDP_LENGTH = size + 8;
-	h->UDP_CHECKSUM = 0;
+	lisp->type = 8;
 
-	norder(packet, sizeof(struct lisp_header6));
-	memcpy(h->S_EID, saddr, 16);
-	memcpy(h->D_EID, daddr, 16);
-	*packetsize = size + sizeof(struct lisp_header6);
-	return packet;
+	return sizeof(struct lisp_hdr);
 }
 
-void *ipv4_encap_map_request(unsigned int *packetsize, void *buf, int size, void *saddr, void *daddr){
-        struct lisp_header4 *h;
+int create_ipv6_header(char *buf, int plen){
+        char rloc[16];
+	char resolver[16];
+
+        struct config *rloc_config = (struct config *)config_root.under_layers[RLOC_LAYER];
+        if(rloc_config == NULL){
+                warn("no rloc configured");
+                return -1;
+        }
+        struct rloc_layer_data *rloc_data = (struct rloc_layer_data *)(rloc_config->data);
+        struct address_list *addr_list = &(rloc_data->v6address);
+	addr_list = addr_list->next;
+        if(addr_list == NULL){
+                warn("no rloc configured");
+		return -1;
+        }
+
+	inet_pton(AF_INET6, addr_list->address, rloc);
+
+	struct config *mapresolver_config = (struct config *)config_root.under_layers[MAPRESOLVER_LAYER];
+	if(mapresolver_config == NULL){
+		warn("no resolver configured");
+		return -1;
+	}
+	struct mapresolver_layer_data *mapresolver_data = (struct mapresolver_layer_data *)(mapresolver_config->data);
+	addr_list = &(mapresolver_data->v6address);
+	addr_list = addr_list->next;
+	if(addr_list == NULL){
+		err("no resolver configured");
+		return -1;
+	}
+
+	inet_pton(AF_INET6, addr_list->address, resolver);
+
+
+	struct ip6_hdr *ip6 = (struct ip6_hdr *)buf;
+
+	ip6->ip6_vfc = 6 << 4;
+	ip6->ip6_plen = htons(plen);
+	ip6->ip6_nxt = IPPROTO_UDP;
+	ip6->ip6_hlim = 0x40;
+
+	memcpy(&(ip6->ip6_src), rloc, 16);
+	memcpy(&(ip6->ip6_dst), resolver, 16);
+
+	return sizeof(struct ip6_hdr);
+}
+
+int create_ipv4_header(char *buf, int plen){
+        char rloc[16];
+        char resolver[16];
+
+        struct config *rloc_config = (struct config *)config_root.under_layers[RLOC_LAYER];
+        if(rloc_config == NULL){
+                warn("no rloc configured");
+                return -1;
+        }
+        struct rloc_layer_data *rloc_data = (struct rloc_layer_data *)(rloc_config->data);
+        struct address_list *addr_list = &(rloc_data->v4address);
+        addr_list = addr_list->next;
+        if(addr_list == NULL){
+                warn("no rloc configured");
+                return -1;
+        }
+
+        inet_pton(AF_INET, addr_list->address, rloc);
+
+        struct config *mapresolver_config = (struct config *)config_root.under_layers[MAPRESOLVER_LAYER];
+        if(mapresolver_config == NULL){
+                warn("no resolver configured");
+                return -1;
+        }
+        struct mapresolver_layer_data *mapresolver_data = (struct mapresolver_layer_data *)(mapresolver_config->data);
+        addr_list = &(mapresolver_data->v4address);
+        addr_list = addr_list->next;
+        if(addr_list == NULL){
+                err("no resolver configured");
+                return -1;
+        }
+
+        inet_pton(AF_INET, addr_list->address, resolver);
+
 	static int identification;
+	struct iphdr *ip = (struct iphdr *)buf;
 	unsigned short checksum;
-        char  *packet = (char *)malloc(size + sizeof(struct lisp_header4));
-        memset(packet, 0, size + sizeof(struct lisp_header4));
 
-        memcpy(packet + sizeof(struct lisp_header4), buf, size);
+	identification++;
 
-        h = (struct lisp_header4 *)packet;
+	ip->ihl = 5;
+	ip->version = 4;
+	ip->tot_len = htons(plen);
+	ip->id = htons(identification);
+	ip->ttl = 64;
+	ip->protocol = IPPROTO_UDP;
+	ip->check = 0;
 
-        h->TYPE = 8;
-        h->RESERVED = 0;
+	memcpy(&(ip->saddr), rloc, 4);
+	memcpy(&(ip->daddr), resolver, 4);
 
-        h->VERSION = 4;
-        h->IHL = 5;
-        h->TYPE_OF_SERVICE = 0;
-        h->TOTAL_LEN = size + sizeof(struct lisp_header4) - 4;
+	ip->check = ipv4_checksum((unsigned short *)buf, ip->ihl * 4);
 
-        identification++;      
-        h->IDENTIFICATION = identification;
-        h->IPFLAGS = 0;
-        h->FRAGMENT_OFFSET = 0;
+	return sizeof(struct iphdr);
+}
 
-        h->TTL = 64;
-        h->PROTOCOL = 0x11;
-	h->CHECKSUM = 0;
+int create_udp_header(char *buf, int plen){
+	struct udphdr *udp = (struct udphdr *)buf;
 
-        h->SOURCE_PORT = port_num;
-        h->DEST_PORT = 4342;
-        h->UDP_LENGTH = size + 8;
-        h->UDP_CHECKSUM = 0;
+	udp->source = htons(port_num);
+	udp->dest = htons(4342);
+	udp->len = htons(plen);
+	udp->check = 0;
 
-        norder(packet, sizeof(struct lisp_header4));
-        memcpy(h->S_EID, saddr, 4);
-        memcpy(h->D_EID, daddr, 4);
+	return sizeof(struct udphdr);
+}
 
-        /* calculate ipv4 checksum */
-        checksum = ipv4_checksum((unsigned short *)(packet + 4), 20);
-        horder(packet, sizeof(struct lisp_header4));
-        h->CHECKSUM = htons(checksum);
-        norder(packet, sizeof(struct lisp_header4));
+char *encapsulate_map_request(char *buf, int size, int *encapsulated_size){
+	char *encapsulated_packet;
+	int offset = 0;
+	int plen = 0;
+	if(control_version == 6){
+		plen = sizeof(struct lisp_hdr) + sizeof(struct ip6_hdr) + sizeof(struct udphdr) + size;
+		if(plen > MTU){
+			return NULL;
+		}
+		encapsulated_packet = (char *)malloc(plen);
+		memset(encapsulated_packet, 0, plen);
+		offset += create_ipv6_header(encapsulated_packet + sizeof(struct lisp_hdr), plen - (sizeof(struct ip6_hdr) + sizeof(struct lisp_hdr)));
+	}else if(control_version == 4){
+		plen = sizeof(struct lisp_hdr) + sizeof(struct iphdr) + sizeof(struct udphdr) + size;
+		if(plen > MTU){
+			return NULL;
+		}
+		encapsulated_packet = (char *)malloc(plen);
+		memset(encapsulated_packet, 0, plen);
+		offset += create_ipv4_header(encapsulated_packet + sizeof(struct lisp_hdr), plen - sizeof(struct lisp_hdr));
+	}
 
-        *packetsize = size + sizeof(struct lisp_header4);
-        return packet;
+	offset += create_lisp_header(encapsulated_packet);
+	offset += create_udp_header(encapsulated_packet + offset, plen - offset);
+	
+	memcpy(encapsulated_packet + offset, buf, size);
+	offset += size;
+
+	*encapsulated_size = offset;
+	return encapsulated_packet;
 }
 

@@ -36,15 +36,13 @@ void nl_send_request(int af, char *daddr){
         NETLINK_CB(skb).pid = 0; //from kernel
 	NETLINK_CB(skb).dst_group = NETLINK_GROUP; //multicast for group 1
 
-	netlink_broadcast(nl_sk, skb, NETLINK_CB(skb).pid, NETLINK_CB(skb).dst_group, GFP_KERNEL);
+	netlink_broadcast(nl_sk, skb, NETLINK_CB(skb).pid, NETLINK_CB(skb).dst_group, GFP_ATOMIC);
 	return;
 }
 
 void nl_receive_result(struct sk_buff *skb){
 	struct nlmsghdr *nlh = NULL;
 	struct netlink_result *res;
-
-	wake_up_interruptible(nl_sk->sk_sleep);
 
 	if(skb == NULL) {
 		printk(KERN_INFO "NULL skb.\n");
@@ -56,26 +54,36 @@ void nl_receive_result(struct sk_buff *skb){
 
 	if(ntohl(res->operation) == ROUTE_REGIST){
 		if(ntohl(res->af) == 1){
-       	        	spin_lock(&route4);
+       	        	spin_lock_bh(&route4);
                 	regist_prefix(&ipv4_start, res->eid, ntohl(res->prefix), res->rloc, ntohl(res->rloc_af));
-                	spin_unlock(&route4);
+                	spin_unlock_bh(&route4);
 		} else if(ntohl(res->af) == 2) {
-                	spin_lock(&route6);
+                	spin_lock_bh(&route6);
                 	regist_prefix(&ipv6_start, res->eid, ntohl(res->prefix), res->rloc, ntohl(res->rloc_af));
-                	spin_unlock(&route6);
+                	spin_unlock_bh(&route6);
 		}
 
 	}else if(ntohl(res->operation) == ROUTE_DELETE){
 		if(ntohl(res->af) == 1){
-       	        	spin_lock(&route4);
+       	        	spin_lock_bh(&route4);
                 	delete_prefix(&ipv4_start, res->eid, ntohl(res->prefix));
-                	spin_unlock(&route4);
+                	spin_unlock_bh(&route4);
 		} else if(ntohl(res->af) == 2) {
-                	spin_lock(&route6);
+                	spin_lock_bh(&route6);
                 	delete_prefix(&ipv6_start, res->eid, ntohl(res->prefix));
-                	spin_unlock(&route6);
+                	spin_unlock_bh(&route6);
 		}
 
+	}else if(ntohl(res->operation) == ROUTE_FLUSH){
+		if(ntohl(res->af) == 1){
+			spin_lock_bh(&route4);
+			flush_route(&ipv4_start);
+			spin_unlock_bh(&route4);
+		} else if(ntohl(res->af) == 2) {
+			spin_lock_bh(&route6);
+			flush_route(&ipv6_start);
+			spin_unlock_bh(&route6);
+		}
 	}
 
 	return;

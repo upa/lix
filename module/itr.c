@@ -37,9 +37,9 @@ unsigned int ipv4_itr_process_packet(struct iphdr *iph, int data_len, const stru
 	memset(accept, 0, 16);
 	memset(drop, 0xff, 16);
 
-	spin_lock(&route4);
+	spin_lock_bh(&route4);
 	match_len = match_dst(&ipv4_start, (char *)&(iph->daddr), nexthop, &af);
-	spin_unlock(&route4);
+	spin_unlock_bh(&route4);
 
         if((af == 2) && (data_len > MTU - 56)){
                 ipv4_fragment_packet((char *)iph, data_len, MTU - 56, in);
@@ -82,9 +82,9 @@ unsigned int ipv4_itr_process_packet(struct iphdr *iph, int data_len, const stru
 		}
 	}else{
 		/* register temporary drop table */
-		spin_lock(&route4);
+		spin_lock_bh(&route4);
 		regist_prefix(&ipv4_start, (char *)&(iph->daddr), 32, drop, 0);
-		spin_unlock(&route4);
+		spin_unlock_bh(&route4);
 
 		/* instead of enqueue, request user land daemon to send Map-request */
 		nl_send_request(1, (char *)&(iph->daddr));
@@ -107,9 +107,9 @@ unsigned int ipv6_itr_process_packet(struct ipv6hdr *ip6h, int data_len, const s
 	memset(accept, 0, 16);
 	memset(drop, 0xff, 16);
 
-	spin_lock(&route6);
+	spin_lock_bh(&route6);
 	match_len = match_dst(&ipv6_start, (char *)&(ip6h->daddr), nexthop, &af);
-	spin_unlock(&route6);
+	spin_unlock_bh(&route6);
 
         if((af == 2) && (data_len > MTU - 56)){
                 ipv6_return_icmp((char *)ip6h, data_len, MTU - 56, in);
@@ -152,9 +152,9 @@ unsigned int ipv6_itr_process_packet(struct ipv6hdr *ip6h, int data_len, const s
 		}
 	}else{
 		/* register temporary drop table */
-		spin_lock(&route6);
+		spin_lock_bh(&route6);
 		regist_prefix(&ipv6_start, (char *)&(ip6h->daddr), 128, drop, 0);
-		spin_unlock(&route6);
+		spin_unlock_bh(&route6);
 
 		/* instead of enqueue, request user land daemon to send Map-request */
 		nl_send_request(2, (char *)&(ip6h->daddr));

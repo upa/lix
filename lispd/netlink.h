@@ -1,5 +1,6 @@
 #define ROUTE_REGIST 1
 #define ROUTE_DELETE 2
+#define ROUTE_FLUSH 3
 
 struct netlink_request {
 	char daddr[16];

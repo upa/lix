@@ -12,9 +12,20 @@ net.ipv6.conf.default.forwarding=1
 
 sudo sysctl -p
 
+1. Save your iptables to a file using the following command:
+iptables-save > /etc/iptables.conf
+ip6tables-save > /etc/ip6tables.conf
+
+2. Then edit the /etc/network/interfaces file
+by adding the following line right after 'iface eth0 inet static':
+  pre-up iptables-restore < /etc/iptables.conf
+  pre-up ip6tables-restore < /etc/ip6tables.conf
+
 add /etc/network/interfaces:
 auto eth0
 iface eth0 inet static
+	pre-up iptables-restore < /etc/iptables.conf
+	pre-up ip6tables-restore < /etc/ip6tables.conf
 	address 203.178.143.239
 	netmask 255.255.255.0
 	gateway 203.178.143.84

@@ -1,6 +1,24 @@
 TODO:
+debug) fix dataplene packet udp checksum is added unexpectedly in some environment
+module) copy TTL from outer header to inner header in ETR!
 lispd)parse config
+	->implement static map-cache
+	->add address to rloc0 automatically
+	->add -c argument to determine config file
 lispd)improve control-plane 
 	(e.g. multiple rloc map-request)
 	(e.g. parse multiple rloc in map-reply)
 module)multiple rloc(weight and priority)
+
+Bug fix
+comment outed "wake_up_interruptible"
+changed flags from GFP_ATOMIC to GFP_KERNEL in control-plane to reduce failing to allocate memory space for new route information
+changed spin_lock to spin_lock_irq to reduce deadlock
+changed all flags from GFP_ATOMIC to GFP_KERNEL
+changed spin_lock_irq to spin_lock_bh to reduce deadlock
+fixed TTL handling at cache information insertion
+change flag to GFP_ATOMIC in critical section(when holding spin_lock)
+  See http://ubuntuforums.org/showthread.php?t=1718667
+change all flag to GFP_ATOMIC because all kmalloc is executed in interrupt context
+  normal -> GFP_KERNEL
+  interrupt -> GFP_ATOMIC

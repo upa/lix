@@ -38,16 +38,14 @@ void *netlink_receive_request(void *args){
 
 	                /* lock ipv4 map-request queue */
 	                if(pthread_mutex_lock(&mutex_queuev4) != 0){
-	                        printf("pthread: main: queuev4 lock failed\n");
-	                        exit(1);
+				err(EXIT_FAILURE, "pthread: main: queuev4 lock failed");
 	                }
 
 	                enqueue(&ipv4_queue_start, request->daddr);
 
 	                /* unlock ipv4 map-request queue */
 	                if(pthread_mutex_unlock(&mutex_queuev4) != 0){
-	                        printf("pthread: main: queuev4 unlock failed\n");
-	                        exit(1);
+				err(EXIT_FAILURE, "pthread: main: queuev4 unlock failed");
 	                }
 
 	                /* trylock ipv4 map-request checkthread */
@@ -58,25 +56,21 @@ void *netlink_receive_request(void *args){
 
 	                        /* signaling to main thread */
 	                        if(pthread_cond_signal(&cond_reqv4) != 0){
-	                                printf("pthread: main: queuev4 cond_signal failed\n");
-	                                exit(1);
+					err(EXIT_FAILURE, "pthread: main: queuev4 cond_signal failed");
 	                        }
 	                        /* finalize signaling */
 	                        if(pthread_mutex_unlock(&mutex_reqv4) != 0){
-	                                printf("pthread: main: queuev4 unlock failed\n");
-	                                exit(1);
+					err(EXIT_FAILURE, "pthread: main: queuev4 unlock failed");
 	                        }
 	                }else{
-	                        printf("pthread: main: queuev4 trylock failed\n");
-	                        exit(1);
+				err(EXIT_FAILURE, "pthread: main: queuev4 trylock failed");
 	                }
 
 		}else if(ntohl(request->dest_af) == 2){
 
 	                /* lock ipv6 map-request queue */
 	                if(pthread_mutex_lock(&mutex_queuev6) != 0){
-	                        printf("pthread: main: queuev6 lock failed\n");
-	                        exit(1);
+				err(EXIT_FAILURE, "pthread: main: queuev6 lock failed");
 	                }
 
 	                enqueue(&ipv6_queue_start, request->daddr);
@@ -84,8 +78,7 @@ void *netlink_receive_request(void *args){
 
 	                /* unlock ipv6 map-request queue */
 	                if(pthread_mutex_unlock(&mutex_queuev6) != 0){
-	                        printf("pthread: main: queuev6 unlock failed\n");
-	                        exit(1);
+				err(EXIT_FAILURE, "pthread: main: queuev6 unlock failed");
 	                }
 
 	                /* trylock ipv6 map-request checkthread */
@@ -96,18 +89,15 @@ void *netlink_receive_request(void *args){
 
 	                        /* signaling to main thread */
 	                        if(pthread_cond_signal(&cond_reqv6) != 0){
-	                                printf("pthread: main: queuev6 cond_signal failed\n");
-	                                exit(1);
+					err(EXIT_FAILURE, "pthread: main: queuev6 cond_signal failed");
 	                        }
 
 	                        /* finalize signaling */
 	                        if(pthread_mutex_unlock(&mutex_reqv6) != 0){
-	                                printf("pthread: main: queuev6 unlock failed\n");
-	                                exit(1);
+					err(EXIT_FAILURE, "pthread: main: queuev6 unlock failed");
 	                        }
 	                }else{
-	                        printf("pthread: main: queuev6 trylock failed\n");
-	                        exit(1);
+				err(EXIT_FAILURE, "pthread: main: queuev6 trylock failed");
 	                }
 
 		}

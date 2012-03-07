@@ -17,6 +17,7 @@
 #include <net/ethernet.h>
 #include <linux/netlink.h>
 #include <pthread.h>
+#include <syslog.h>
 
 #include "main.h"
 #include "utils.h"
@@ -25,6 +26,9 @@
 #include "register.h"
 #include "queue.h"
 #include "netlink.h"
+#include "parser.h"
+#include "cli.h"
+#include "reply.h"
 
 pthread_t thread_id_recv;
 pthread_t thread_id_ipv4_ttl;
@@ -51,10 +55,18 @@ pthread_cond_t cond_reqv6 =  PTHREAD_COND_INITIALIZER;
 struct queue_item ipv4_queue_start;
 struct queue_item ipv6_queue_start;
 
+struct config config_root;
+struct state_list states_root;
 
 int udp_sock;
 int port_num;
 int netlink_sock;
+int control_version;
+int default_ttl;
+int syslog_facility;
+char authentication_key[256];
+char config_path[1024];
+char *optarg;
 
 void cleanup_signal(int sig){
 	close(udp_sock);
@@ -70,19 +82,44 @@ void usage(){
 	printf(" option:\n");
 	printf("\t-h: Show help.\n");
 	printf("\t-d: Run as a daemon.\n");
+	printf("\t-c: Set config file path");
 	printf("\n");
 
 	return;
 }
 
+void setup_syslog_facility(char *config){
+	if(!strcmp(config, "local0")){
+		syslog_facility = LOG_LOCAL0;
+	}else if(!strcmp(config, "local1")){
+		syslog_facility = LOG_LOCAL1;
+	}else if(!strcmp(config, "local2")){
+		syslog_facility = LOG_LOCAL2;
+	}else if(!strcmp(config, "local3")){
+		syslog_facility = LOG_LOCAL3;
+	}else if(!strcmp(config, "local4")){
+		syslog_facility = LOG_LOCAL4;
+	}else if(!strcmp(config, "local5")){
+		syslog_facility = LOG_LOCAL5;
+	}else if(!strcmp(config, "local6")){
+		syslog_facility = LOG_LOCAL6;
+	}else if(!strcmp(config, "local7")){
+		syslog_facility = LOG_LOCAL7;
+	}else{
+		syslog_facility = LOG_DAEMON;
+	}
+}
+
 int main (int argc, char * argv[]){
 	int ch;
 	int d_flag = 0;
+	int c_flag = 0;
 	struct sockaddr_in6 me;
 	int sock_size;
 	struct sockaddr_nl s_nladdr;
+	int send_map_register_or_not;
 
-	while ((ch = getopt (argc, argv, "hd")) != -1) {
+	while ((ch = getopt (argc, argv, "hdc:")) != -1) {
 		switch (ch) {
 			case 'h' :
 				usage ();
@@ -93,9 +130,22 @@ int main (int argc, char * argv[]){
 				d_flag = 1;
 				break;
 
+			case 'c' :
+				if(optarg == NULL){
+					err (EXIT_FAILURE, "please set config file path after -c option");
+				}else{
+					strcpy(config_path, optarg);
+					c_flag = 1;
+				}
+
+				break;
+
 			default :
 				break;
 			}
+	}
+	if(c_flag == 0){
+		err (EXIT_FAILURE, "please set config file path after -c option");
 	}
 
         if (signal (SIGINT, cleanup_signal)  == SIG_ERR)
@@ -105,8 +155,23 @@ int main (int argc, char * argv[]){
                 err (EXIT_FAILURE, "failt to register SIGTERM");
         }
 
+        memset(&states_root, 0, sizeof(struct state_list));
+        memset(&config_root, 0, sizeof(struct config));
+        flush_config(&config_root, &states_root);
+	parse_config(&config_root, &states_root);
+
+        struct config *root_config = (struct config *)&config_root;
+        struct root_layer_data *root_data = (struct root_layer_data *)(root_config->data);
+	send_map_register_or_not = root_data->send_map_register;
+	default_ttl = root_data->default_ttl;
+	control_version = root_data->control_ip_version;
+	memset(authentication_key, 0, 256);
+	strcpy(authentication_key, root_data->authentication_key);
+	setup_syslog_facility(root_data->syslog_facility);
+
+	/* run as a daemon */
         if (d_flag > 0) {
-                if (daemon (0, 0) != 0)
+                if (daemon (0, 1) != 0)
                         err (EXIT_FAILURE, "fail to run as a daemon\n");
         }
 
@@ -117,19 +182,16 @@ int main (int argc, char * argv[]){
 
         udp_sock = ipv6_create_sock();
         if(udp_sock < 0) {
-                perror("socket");
-                exit(1);
+		err(EXIT_FAILURE, "socket");
         }
 
         if(bind(udp_sock, (struct sockaddr *)&me, sizeof(me)) < 0){
-                perror("ipv6 bind");
-                exit(1);
+		err(EXIT_FAILURE, "ipv6 bind");
         }
 
 	sock_size = sizeof(me);
 	if(getsockname(udp_sock, (struct sockaddr *)&me, &sock_size) < 0){
-		perror("getsockname");
-		exit(1);
+		err(EXIT_FAILURE, "getsockname");
 	}
 	port_num = ntohs(me.sin6_port);
 
@@ -143,31 +205,30 @@ int main (int argc, char * argv[]){
                 exit(1);
         }
 
-	/* initiate register thread */
-	if(pthread_mutex_lock(&mutex_reg) != 0){
-		printf("pthread: register: lock failed\n");
-		exit(1);
-	}
+	if(send_map_register_or_not == 1){
+		/* initiate register thread */
+		if(pthread_mutex_lock(&mutex_reg) != 0){
+			err(EXIT_FAILURE, "pthread: register: lock failed");
+		}
 
-	/* start sending map-regist */
-	if (pthread_create(&thread_id_reg, NULL, send_map_register, NULL) != 0 ){ 
-		exit(1);  
-	}  
+		/* start sending map-regist */
+		if (pthread_create(&thread_id_reg, NULL, start_map_register, NULL) != 0 ){ 
+			exit(1);  
+		}  
 
-	/* wait to cleanup register */
-	if(pthread_cond_wait(&cond_reg, &mutex_reg) != 0){
-      		printf("pthread: register: wait failed\n");
-		exit(1);
-	}
+		/* wait to cleanup register */
+		if(pthread_cond_wait(&cond_reg, &mutex_reg) != 0){
+			err(EXIT_FAILURE, "pthread: register: wait failed");
+		}
 
-	/* finalize initiation */
-	if(pthread_mutex_unlock(&mutex_reg) != 0){
-		printf("pthread: register: unlock failed\n");
-		exit(1);
+		/* finalize initiation */
+		if(pthread_mutex_unlock(&mutex_reg) != 0){
+			err(EXIT_FAILURE, "pthread: register: unlock failed");
+		}
 	}
 
         /* start receiving reply */
-        if (pthread_create(&thread_id_recv, NULL, receive_control_packet, NULL) != 0 ){
+        if (pthread_create(&thread_id_recv, NULL, receive_response_packet, NULL) != 0 ){
                 exit(1);
         }
 
@@ -196,8 +257,12 @@ int main (int argc, char * argv[]){
                 exit(1);
         }
 
-	while(1){
-		sleep(1000);
-	}
+	flush_route(1);
+	flush_route(2);
+
+	ipv6_regist_static_routes();
+	ipv4_regist_static_routes();
+
+	wait_telnet();
 	return 0;
 }

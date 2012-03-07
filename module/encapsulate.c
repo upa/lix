@@ -105,6 +105,7 @@ struct sk_buff *ipv6_encap_packet_itr(void *buf, int size, void *saddr, void *da
 	skb_reserve(skb, LL_MAX_HEADER);
 	skb_put(skb, packet_len);
 	skb_reset_network_header(skb);
+	skb_reset_transport_header(skb);
 	skb->protocol = htons(ETH_P_IPV6);
 
 	h = (struct ipv6_itr_header *)skb->data;
@@ -139,6 +140,7 @@ struct sk_buff *ipv4_encap_packet_itr(void *buf, int size, void *saddr, void *da
 	skb_reserve(skb, LL_MAX_HEADER);
 	skb_put(skb, packet_len);
 	skb_reset_network_header(skb);
+	skb_reset_transport_header(skb);
 	skb->protocol = htons(ETH_P_IP);
 
 	h = (struct ipv4_itr_header *)skb->data;

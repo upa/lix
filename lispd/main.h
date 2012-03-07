@@ -1,6 +1,15 @@
 extern int udp_sock;
 extern int netlink_sock;
 extern int port_num;
+extern int default_ttl;
+extern int control_version;
+extern char authentication_key[256];
+extern int syslog_facility;
+extern char * optarg;
+extern char config_path[1024];
+
+extern struct config config_root;
+extern struct state_list states_root;
 
 /* for register thread */
 extern pthread_mutex_t mutex_reg;
@@ -19,26 +28,15 @@ extern pthread_cond_t cond_reqv6;
 extern struct queue_item ipv4_queue_start;
 extern struct queue_item ipv6_queue_start;
 
+void usage();
 void cleanup_sigint (int sig);
+void setup_syslog_facility(char *config);
 
 #define NETLINK_LISP 17
 #define NETLINK_GROUP 1
-
-#define EID6 "2001:0200:0000:88a6::"
-#define PREFIX6 64
-#define RLOC6 "2001:200:0:8801:203:178:143:97"
-
-#define EID4 "153.16.68.128"
-#define PREFIX4 25
-#define RLOC4 "203.178.143.97"
-
-#define MAP_SERVER6 "2001:200:0:1005:203:178:139:68"
-#define MAP_SERVER4 "203.178.139.68"
-#define AUTH_KEY "marutaka"
+#define PROCESS_NAME "lispd"
 #define SHA_DIGEST_LENGTH 20
-
-#define MAP_RESOLVER6 "2001:200:0:1005:203:178:139:68"
-#define MAP_RESOLVER4 "203.178.139.68"
-#define DEFAULT_TTL 60 
-
-#define CONTROL_VERSION 4
+#define MAPREGIST_INTERVAL 60
+#define MTU 1500
+#define IANA_AFI_IPV4   0x0100
+#define IANA_AFI_IPV6   0x0200

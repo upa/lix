@@ -50,7 +50,7 @@ void ipv4_fragment_packet(char *frame, int data_len, int limit, const struct net
 			size = ((limit - 20) / 8) * 8;
 		}
 
-		packet = kmalloc(size + sizeof(struct iphdr), GFP_KERNEL);
+		packet = kmalloc(size + sizeof(struct iphdr), GFP_ATOMIC);
 		hdr = (struct iphdr *)packet;
 
 		memset(packet, 0, size + sizeof(struct iphdr));

@@ -5,6 +5,7 @@
 #include <netinet/ip.h>
 #include <netinet/ip6.h>
 #include <netdb.h>
+#include <syslog.h>
 
 #include <stdlib.h>
 #include <string.h>
@@ -14,38 +15,55 @@
 
 #include <sys/ioctl.h>
 #include <net/if.h>
+#include <stdarg.h>
 
 #include "utils.h"
 #include "main.h"
 
-/* convert host byte order buffer to network byte order */
-void norder(void * start, int size){
-	int s;
-	int i = size / 4;
-	int *list = start;
+int free_record(struct record *start){
+	struct record *ptr = start;
+	struct record *prev;
 
-	if(size % 4 != 0){
-		printf("illegal size of data\n");
+	ptr = ptr->next;
+	if(ptr == NULL){
+		return -1;
 	}
-	
-	for(s = 0; s < i; s++){
-		list[s] = htonl(list[s]);	
-	}
+
+	do{
+		prev = ptr;
+		ptr = ptr->next;
+
+		if(prev->attr != NULL){
+			free(prev->attr);
+		}
+		free(prev);
+	}while(ptr != NULL);
+
+	return 0;
 }
 
-/* convert network byte order buffer to host byte order */
-void horder(void * start, int size){
-        int s;
-        int i = size / 4;
-        int *list = start;
+int add_record(struct record *record_start, int af, int prefix, char *address, void *attr){
+	struct record *ptr = record_start;
 
-        if(size % 4 != 0){
-                printf("illegal size of data\n");
-        }
+	while(ptr->next != NULL){
+		ptr = ptr->next;
+	}
 
-        for(s = 0; s < i; s++){
-                list[s] = ntohl(list[s]);
-        }
+	ptr->next = (struct record *)malloc(sizeof(struct record));
+	memset(ptr->next, 0, sizeof(struct record));
+
+	ptr = ptr->next;
+	ptr->af = af;
+	ptr->prefix = prefix;
+	ptr->attr = attr;
+
+	if(af == AF_INET){
+		memcpy(&ptr->address, address, sizeof(struct in_addr));
+	}else if(af == AF_INET6){
+		memcpy(&ptr->address, address, sizeof(struct in6_addr));
+	}
+
+	return 0;
 }
 
 /* create random nonce */
@@ -161,3 +179,72 @@ unsigned short icmp6_checksum(struct ip6_hdr *ip6, unsigned short *payload, int 
 
         return ~sum;
 }
+
+void clear_hostbit(int af, char *addr, int prefix){
+	int target;
+	int i;
+
+	if(af == AF_INET){
+		target = 32;
+
+	}else if(af == AF_INET6){
+		target = 128;
+	}
+
+	for(i = prefix + 1; i <= target; i++){
+		clear_bit(addr, i);
+	}
+
+}
+
+int clear_bit(void *addr, int prefix){
+	int i = (prefix - 1) / 32;
+	int j = prefix - (i * 32);
+
+	unsigned int temp = 1 << (32 - j);
+	unsigned int *ptr = addr;
+	unsigned int s = htonl(ptr[i]);
+
+	ptr[i] = ntohl(s & ~temp);
+}
+
+void syslog_write(int level, char *fmt, ...){
+	va_list args;
+	va_start(args, fmt);
+	char buffer[1024];
+
+	vsprintf(buffer, fmt, args);
+
+	syslog_open();
+	syslog(level, buffer);
+	syslog_close();
+
+	va_end(args);
+}
+
+void syslog_open(){
+    openlog(PROCESS_NAME, LOG_CONS | LOG_PID, syslog_facility);
+}
+
+void syslog_close() {
+    closelog();
+}
+
+int get_addr_af(char *addr){
+        struct addrinfo hints, * res;
+        memset (&hints, 0, sizeof (hints));
+        hints.ai_family = AF_UNSPEC;
+	int af;
+        
+        if (getaddrinfo (addr, NULL, &hints, &res) != 0) {
+		err(EXIT_FAILURE, "error while getting af of address");
+        }
+
+	af = res->ai_family;
+        
+        freeaddrinfo (res);
+
+	return af;
+}
+
+

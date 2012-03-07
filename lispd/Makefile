@@ -1,13 +1,13 @@
 #Makefile
 #char code "LF(UNIX)" is required!!
 
-OPTIONS = -O1 
+OPTIONS = -O1
 PROGS = main
 
 all: $(PROGS)
 
-main: main.o request.o utils.o route.o encapsulate.o register.o queue.o netlink.o
-	cc $(OPTIONS) -o lisp main.o request.o utils.o route.o queue.o encapsulate.o register.o netlink.o -l ssl -l pthread
+main: main.o request.o utils.o route.o encapsulate.o register.o queue.o netlink.o parser.o cli.o reply.o
+	cc $(OPTIONS) -o lispd main.o request.o utils.o route.o queue.o encapsulate.o register.o netlink.o parser.o cli.o reply.o -l ssl -l pthread
 	rm *.o
 
 main.o : main.c
@@ -33,3 +33,12 @@ queue.o : queue.c
 
 netlink.o : netlink.c
 	cc $(OPTIONS) -c netlink.c
+
+parser.o : parser.c
+	cc $(OPTIONS) -c parser.c
+
+cli.o : cli.c
+	cc $(OPTIONS) -c cli.c
+
+reply.o : reply.c
+	cc $(OPTIONS) -c reply.c

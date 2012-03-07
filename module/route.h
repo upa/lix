@@ -11,4 +11,4 @@ int return_bit(void *addr, int prefix);
 struct route_entry *regist_prefix(struct route_entry *start, char *network, int prefix, char *nexthop, int af);
 int match_dst(struct route_entry *start, char *dst, char *nexthop, int *af);
 int delete_prefix(struct route_entry *start, char *network, int prefix);
-
+int flush_route(struct route_entry *start);

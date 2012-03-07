@@ -40,7 +40,7 @@ struct route_entry *regist_prefix(struct route_entry *start, char *network, int 
 
 		if(return_bit(network, i + 1)){
 			if(ptr->one == NULL){
-				ptr->one = (struct route_entry *)kmalloc(sizeof(struct route_entry), GFP_KERNEL);
+				ptr->one = (struct route_entry *)kmalloc(sizeof(struct route_entry), GFP_ATOMIC);
 				memset(ptr->one, 0, sizeof(struct route_entry));
 				ptr->one->parent = ptr;
 				ptr = ptr->one;
@@ -49,7 +49,7 @@ struct route_entry *regist_prefix(struct route_entry *start, char *network, int 
 			}
 		}else{
 			if(ptr->zero == NULL){
-				ptr->zero = (struct route_entry *)kmalloc(sizeof(struct route_entry), GFP_KERNEL);
+				ptr->zero = (struct route_entry *)kmalloc(sizeof(struct route_entry), GFP_ATOMIC);
 				memset(ptr->zero, 0, sizeof(struct route_entry));
 				ptr->zero->parent = ptr;
 				ptr = ptr->zero;
@@ -98,6 +98,42 @@ int match_dst(struct route_entry *start, char *dst, char *nexthop, int *af){
 	return prefix;
 }
 
+int flush_route(struct route_entry *start){
+	struct route_entry *ptr = start;
+	struct route_entry *temp;
+
+	while(start->one != NULL || start->zero != NULL){
+		while(ptr->zero != NULL || ptr->one != NULL){
+			if(ptr->zero != NULL){
+				ptr = ptr->zero;
+			}else if(ptr->one != NULL){
+				ptr = ptr->one;
+			}
+		}
+
+	        if(ptr->flag == 0){
+	                printk(KERN_INFO "lisp: route: route register bug assumed!\n");
+	        }else{
+	                ptr->flag = 0;
+	        }
+
+	        while(ptr != start && ptr->flag == 0 && ptr->one == NULL && ptr->zero == NULL){
+        	        temp = ptr;
+                	ptr = ptr->parent;
+                	if(temp == ptr->one){
+                        	ptr->one = NULL;
+                	}else{
+                        	ptr->zero = NULL;
+                	}
+                	kfree(temp);
+        	}
+
+		ptr = start;
+	}
+
+	return 0;
+}
+
 int delete_prefix(struct route_entry *start, char *network, int prefix){
 	int i;
 	struct route_entry *ptr = start;
@@ -105,9 +141,19 @@ int delete_prefix(struct route_entry *start, char *network, int prefix){
 
 	for(i = 0; i < prefix; i++){
 		if(return_bit(network, i + 1)){
-			ptr = ptr->one;
+			if(ptr->one != NULL){
+				ptr = ptr->one;
+			}else{
+				printk(KERN_INFO "lisp: route: the record don't exists\n");
+				return -1;
+			}
 		}else{
-			ptr = ptr->zero;
+			if(ptr->zero != NULL){
+				ptr = ptr->zero;
+			}else{
+				printk(KERN_INFO "lisp: route: the record don't exists\n");
+				return -1;
+			}
 		}
 	} 
 
@@ -116,12 +162,10 @@ int delete_prefix(struct route_entry *start, char *network, int prefix){
 		return -1;
 	}else{
 		ptr->flag = 0;
-		memset(ptr->nexthop, 0, 16);
-		ptr->af = 0;
 	}
 
 
-	while(ptr->flag == 0 && ptr->one != NULL && ptr->zero != NULL){
+	while(ptr != start && ptr->flag == 0 && ptr->one == NULL && ptr->zero == NULL){
 		temp = ptr;
 		ptr = ptr->parent;
 		if(temp == ptr->one){

@@ -3,30 +3,20 @@
 #include <netinet/ip6.h>
 #include <netinet/icmp6.h>
 
-struct ipv6_header {
-        __u32           FLOW_LABEL : 20,
-                        TRAFFIC_CLASS : 8,
-                        VERSION : 4,
-                        HOP_LIMIT : 8,
-                        NEXT_HEADER : 8,
-                        PAYLOAD_LEN : 16;
-        char            S_ADDRESS[16],
-                        D_ADDRESS[16];
+#define IANA_AFI_IPV4	0x0100
+#define IANA_AFI_IPV6	0x0200
+
+union unspec_addr {
+	struct in6_addr		v6addr;
+	struct in_addr		v4addr;
 };
 
-struct ipv4_header {
-         __u32          TOTAL_LEN : 16,
-                        TYPE_OF_SERVICE : 8,
-                        IHL : 4,
-                        VERSION : 4,
-                        FRAGMENT_OFFSET : 13,
-                        IPFLAGS : 3,
-                        IDENTIFICATION : 16,
-                        CHECKSUM : 16,
-                        PROTOCOL : 8,
-                        TTL : 8;
-        char            S_ADDRESS[4],
-                        D_ADDRESS[4];
+struct record {
+	int			af;
+	int			prefix;
+	union unspec_addr	address;	
+	struct			record *next;
+	void			*attr;
 };
 
 struct pseudo_ipv6_header{
@@ -37,8 +27,8 @@ struct pseudo_ipv6_header{
         u_int8_t	ip6_p_nxt;
 };
 
-void norder(void * start, int size);
-void horder(void * start, int size);
+int free_record(struct record *start);
+int add_record(struct record *record_start, int af, int prefix, char *address, void *attr);
 void nonce(char *ptr, int size);
 int ipv6_create_sock();
 int ipv4_create_sock();
@@ -49,5 +39,11 @@ void ipv6_ntoa(char *result, void *ptr);
 int return_ip_version(void *buf);
 unsigned short ipv4_checksum(unsigned short *buf, int size);
 unsigned short icmp6_checksum(struct ip6_hdr *ip6, unsigned short *payload, int payloadsize);
+void clear_hostbit(int af, char *addr, int prefix);
+int clear_bit(void *addr, int prefix);
+void syslog_write(int level, char *fmt, ...);
+void syslog_open();
+void syslog_close();
+int get_addr_af(char *addr);
 
 

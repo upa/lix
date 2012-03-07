@@ -3,407 +3,320 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <netdb.h>
-
+#include <syslog.h>
 #include <stdlib.h>
 #include <string.h>
-
 #include <linux/types.h>
 #include <time.h>
+#include <pthread.h>
+#include <netinet/in.h>
+#include <netinet/ip.h>
+#include <netinet/ip6.h>
 
-#include "main.h"
 #include "utils.h"
-#include "request.h"
 #include "encapsulate.h"
-#include "queue.h"
+#include "request.h"
+#include "reply.h"
+#include "main.h"
 #include "route.h"
+#include "parser.h"
 
-void ipv4_create_request_packet(struct req_mes4 *req, int reqsize, char * rloc_addr, char * dest_addr, char * source_addr, int query_prefix){
-        unsigned int afi = 0;
-
-        req->h.TYPE = 1;
-        req->h.A = 0;
-        req->h.M = 0;
-        req->h.P = 0;
-        req->h.S = 0;
-        req->h.RESERVED = 0;
-        req->h.IRC = 0;
-        req->h.REC_COUNT = 1;
-        nonce(req->h.NONCE, 8);
-
-        req->d.D_EID_AFI = 1;
-        req->d.D_EID_MASKLEN = query_prefix;
-
-        req->d.RESERVED = 0;
-
-        /* regist temporary route info */
-        struct info *newroute = malloc(sizeof(struct info));
-        memset(newroute, 0, sizeof(struct info));
-        memcpy(newroute->address, dest_addr, 16);
-        memcpy(newroute->nonce, req->h.NONCE, 8);
-        newroute->state = STATE_NONCE;
-        newroute->prefix = query_prefix;
-	newroute->ttl = 3600;
-        ipv4_add_list(newroute);
-
-        norder(req, reqsize);
-
-        afi = 1 << 8;
-        /* 00000000 00000001 00000000 00000000
-           in LITTLE ENDIAN -> copy front 2octed
-        */
-
-        memcpy(req->d.ITR_RLOC, rloc_addr, 4);
-        memcpy(req->d.D_EID, dest_addr, 4);
-
-        memcpy(&(req->d.S_EIDAFI_EID_RLOCAFI[2]), source_addr, 4);
-        memcpy(&(req->d.S_EIDAFI_EID_RLOCAFI[0]), &afi, 2);
-        memcpy(&(req->d.S_EIDAFI_EID_RLOCAFI[6]), &afi, 2);
-}
-
-void ipv6_create_request_packet(struct req_mes6 *req, int reqsize, char * rloc_addr, char * dest_addr, char * source_addr, int query_prefix){
-	unsigned int afi = 0;
-	
-	req->h.TYPE = 1;
-	req->h.A = 0;
-	req->h.M = 0;
-	req->h.P = 0;
-	req->h.S = 0;
-	req->h.RESERVED = 0;
-	req->h.IRC = 0;
-	req->h.REC_COUNT = 1;
-	nonce(req->h.NONCE, 8);
-
-	req->d.D_EID_AFI = 2;
-	req->d.D_EID_MASKLEN = query_prefix;
-
-	req->d.RESERVED = 0;
-
-	/* regist temporary route info */
-        struct info *newroute = malloc(sizeof(struct info));
-        memset(newroute, 0, sizeof(struct info));
-        memcpy(newroute->address, dest_addr, 16);
-	memcpy(newroute->nonce, req->h.NONCE, 8);
-	newroute->state = STATE_NONCE;
-        newroute->prefix = query_prefix;
-	newroute->ttl = 3600;
-	ipv6_add_list(newroute);
-
-
-	norder(req, reqsize);
-
-	afi = 1 << 9;
-	/* 00000000 00000010 00000000 00000000 
-	   in LITTLE ENDIAN -> copy front 2octed
-	*/
-	
-	memcpy(req->d.ITR_RLOC, rloc_addr, 16);
-	memcpy(req->d.D_EID, dest_addr, 16);
-
-	memcpy(&(req->d.S_EIDAFI_EID_RLOCAFI[2]), source_addr, 16);
-	memcpy(&(req->d.S_EIDAFI_EID_RLOCAFI[0]), &afi, 2);
-	memcpy(&(req->d.S_EIDAFI_EID_RLOCAFI[18]), &afi, 2);
-}
-
-int ipv4_send_map_request(char *lisp_dest_addr, int lisp_prefix){
-	char *packet;
-	struct req_mes4 req;
-	int packetsize;
-	int fd;
-	int send_size;
-
-        struct in_addr lisp_source4;
-        inet_pton(AF_INET, RLOC4, &lisp_source4);
-
-        struct timeval socket_timeout;
-        void *dest;
-        int dest_size;
-
-	if(CONTROL_VERSION == 6){
-		struct sockaddr_in6 dest6;
-
-		memset(&dest6, 0, sizeof(dest6));
-		dest6.sin6_family = AF_INET6;
-		dest6.sin6_port = htons(4342);
-		inet_pton(AF_INET6, MAP_RESOLVER6, &dest6.sin6_addr);
-
-		dest = &dest6;
-		dest_size = sizeof(dest6);
-
-	}else if(CONTROL_VERSION == 4){
-                struct sockaddr_in dest4;
-
-                memset(&dest4, 0, sizeof(dest4));
-                dest4.sin_family = AF_INET;
-                dest4.sin_port = htons(4342);
-                inet_pton(AF_INET, MAP_RESOLVER4, &dest4.sin_addr);
-
-		dest = &dest4;
-                dest_size = sizeof(dest4);
+int create_map_request_header(int *offset, char *buffer, struct record *request_dest, struct record *rloc_record){
+	/* count dest records */
+	int dest_record_count = 0;
+	struct record *ptr = request_dest;
+	while(ptr->next != NULL){
+		dest_record_count++;
+		ptr = ptr->next;
 	}
 
-	ipv4_create_request_packet(&req, sizeof(req), (char *)&(lisp_source4.s_addr), lisp_dest_addr, (char *)&(lisp_source4.s_addr), lisp_prefix);
-	packet =  ipv4_encap_map_request(&packetsize, &req, sizeof(req), (char *)&(lisp_source4.s_addr), lisp_dest_addr);
-
-	send_size = sendto(udp_sock, packet, packetsize, 0, (struct sockaddr *)dest, dest_size);
-	if(send_size == -1){
-		perror("send");
-		exit(1);
+	/* count rlocs */
+	int rloc_record_count = 0;
+	ptr = rloc_record;
+	while(ptr->next != NULL){
+		rloc_record_count++;
+		ptr = ptr->next;
 	}
-	printf("request message %d byte sent\n", send_size);
-	free(packet);
+
+	struct map_request_header *header = (struct map_request_header *)buffer;
+
+	header->type = 1;
+	header->auth_bit = 0;
+	header->map_data_present_bit = 0;
+	header->probe_bit = 0;
+	header->smr_bit = 0;
+	header->pitr_bit = 0;
+	header->invoked_bit = 0;
+	header->irc = rloc_record_count - 1;
+	header->record_count = dest_record_count;
+	nonce((char *)&header->nonce, 8);
+
+	*offset += sizeof(struct map_request_header);
 
 	return 0;
 }
 
+int create_map_request_source_eid(int *offset, char *buffer, struct record *request_source){
+	struct record *ptr = request_source->next;
 
-int ipv6_send_map_request(char *lisp_dest_addr, int lisp_prefix){
-	char *packet;
-	struct req_mes6 req;
-	int packetsize;
-	int fd;
-	int send_size;
+	if(ptr->af == AF_INET){
+		struct map_request_source_eid *source_eid = (struct map_request_source_eid *)(buffer + *offset);
+		source_eid->source_eid_afi = IANA_AFI_IPV4;
+		*offset += sizeof(struct map_request_source_eid);
 
-        struct in6_addr lisp_source6;
-        inet_pton(AF_INET6, RLOC6, &lisp_source6);
+		memcpy(buffer + *offset, &(ptr->address), sizeof(struct in_addr));
+		*offset += sizeof(struct in_addr);
+	}else if(ptr->af == AF_INET6){
+		struct map_request_source_eid *source_eid = (struct map_request_source_eid *)(buffer + *offset);
+		source_eid->source_eid_afi = IANA_AFI_IPV6;
+		*offset += sizeof(struct map_request_source_eid);
 
-	struct timeval socket_timeout;
-	void *dest;
-	int dest_size;
-
-	if(CONTROL_VERSION == 6){
-		struct sockaddr_in6 dest6;
-
-		memset(&dest6, 0, sizeof(dest6));
-		dest6.sin6_family = AF_INET6;
-		dest6.sin6_port = htons(4342);
-		inet_pton(AF_INET6, MAP_RESOLVER6, &dest6.sin6_addr);
-
-		dest = &dest6;
-		dest_size = sizeof(dest6);
-	}else if(CONTROL_VERSION == 4){
-                struct sockaddr_in dest4;
-
-                memset(&dest4, 0, sizeof(dest4));
-                dest4.sin_family = AF_INET;
-                dest4.sin_port = htons(4342);
-                inet_pton(AF_INET, MAP_RESOLVER4, &dest4.sin_addr);
-
-		dest = &dest4;
-                dest_size = sizeof(dest4);
+		memcpy(buffer + *offset, &(ptr->address), sizeof(struct in6_addr));
+		*offset += sizeof(struct in6_addr);
 	}
-
-	ipv6_create_request_packet(&req, sizeof(req), lisp_source6.s6_addr, lisp_dest_addr, lisp_source6.s6_addr, lisp_prefix);
-	packet =  ipv6_encap_map_request(&packetsize, &req, sizeof(req), lisp_source6.s6_addr, lisp_dest_addr);
-
-	send_size = sendto(udp_sock, packet, packetsize, 0, (struct sockaddr *)dest, dest_size);
-	if(send_size == -1){
-		perror("send");
-		exit(1);
-	}
-	printf("request message %d byte sent\n", send_size);
-	free(packet);
 
 	return 0;
 }
 
-void *receive_control_packet(void *args){
-        char buf[2000];
-        int readsize;
-        struct rep_mes *reply;
+int create_map_request_rloc(int *offset, char *buffer, struct record *rloc_record){
+	struct record *ptr = rloc_record;
 
-        while(1){
+	while(ptr->next != NULL){
+		ptr = ptr->next;
+		if(ptr->af == AF_INET){
+			if(*offset + sizeof(struct map_request_itr_rloc) + sizeof(struct in_addr) > MTU){
+				return -1;
+			}
 
-                memset(buf, 0, sizeof(buf));
-                readsize = read(udp_sock, buf, sizeof(buf));
-                if(readsize<0){
-                        printf("read failed\n");
-                        exit(1);
-                }
-                printf("data received %d byte.\n", readsize);
+			struct map_request_itr_rloc *itr_rloc = (struct map_request_itr_rloc *)(buffer + *offset);
+			itr_rloc->itr_rloc_afi = IANA_AFI_IPV4;
+			*offset += sizeof(struct map_request_itr_rloc);
 
-                horder(buf, readsize);
-                reply = (struct rep_mes *)buf;
+			memcpy(buffer + *offset, &(ptr->address), sizeof(struct in_addr));
+			*offset += sizeof(struct in_addr);
+		}else if(ptr->af == AF_INET6){
+			if(*offset + sizeof(struct map_request_itr_rloc) + sizeof(struct in6_addr) > MTU){
+				return -1;
+			}
 
-                if(reply->h.TYPE == 2){
-                        if(reply->d.d66.EID_AFI == 2){
-                                ipv6_receive_reply(buf, readsize);
-                        }else if(reply->d.d66.EID_AFI == 1){
-                                ipv4_receive_reply(buf, readsize);
-                        }
-                }
+			struct map_request_itr_rloc *itr_rloc = (struct map_request_itr_rloc *)(buffer + *offset);
+			itr_rloc->itr_rloc_afi = IANA_AFI_IPV6;
+			*offset += sizeof(struct map_request_itr_rloc);
+
+			memcpy(buffer + *offset, &(ptr->address), sizeof(struct in6_addr));
+			*offset += sizeof(struct in6_addr);
+		}
 	}
+
+	return 0;
 }
 
-void ipv6_receive_reply(char *buf, int readsize){
-        struct rep_mes *reply;
+int create_map_request_eid(int *offset, char *buffer, struct record *request_dest){
+	struct record *ptr = request_dest;
 
-        char result_eid[16];
-        char result_rloc[16];
-        int result_prefix;
-        int result_af;
-        int result_num;
-        int result_ttl;
+	while(ptr->next != NULL){
+		ptr = ptr->next;
+		if(ptr->af == AF_INET){
+			if(*offset + sizeof(struct map_request_record) + sizeof(struct in_addr) > MTU){
+				return -1;
+			}
 
+			struct map_request_record *record = (struct map_request_record *)(buffer + *offset);
+			record->eid_mask_len = ptr->prefix;
+			record->eid_prefix_afi = IANA_AFI_IPV4;
+			*offset += sizeof(struct map_request_record);
 
-	memset(result_eid, 0, 16);
-	memset(result_rloc, 0, 16);
-       	reply = (struct rep_mes *)buf;
+			memcpy(buffer + *offset, &(ptr->address), sizeof(struct in_addr));
+			*offset += sizeof(struct in_addr);
+		}else if(ptr->af == AF_INET6){
+			if(*offset + sizeof(struct map_request_record) + sizeof(struct in6_addr) > MTU){
+				return -1;
+			}
 
-       	if(reply->d.d66.ACT != 0){
-               	printf("Negative map-reply returned\n");
-               	result_prefix = reply->d.d66.EID_MASKLEN;
-               	result_ttl = reply->d.d66.TTL;
-               	norder(reply->d.d66.EID_PREFIX, 16);
-               	memcpy(result_eid, reply->d.d66.EID_PREFIX, 16);
+			struct map_request_record *record = (struct map_request_record *)(buffer + *offset);
+			record->eid_mask_len = ptr->prefix;
+			record->eid_prefix_afi = IANA_AFI_IPV6;
+			*offset += sizeof(struct map_request_record);
 
-
-
-                if(ipv6_rem_list_by_nonce(reply->h.NONCE)){
-	                printf("removed temporary route and registered parmanent route\n");
-
-                        printf("regist negative cache prefix = %d\n", result_prefix);
-			regist_prefix(2, result_eid, result_prefix, result_rloc, 0);
-
-                        /* regist route info */
-                        struct info *newroute = malloc(sizeof(struct info));
-                        memset(newroute, 0, sizeof(struct info));
-                        memcpy(newroute->address, result_eid, 16);
-                        newroute->state = STATE_TTL;
-                        newroute->prefix = result_prefix;
-                        newroute->ttl = result_ttl * 60;
-                        ipv6_add_list(newroute);
+			memcpy(buffer + *offset, &(ptr->address), sizeof(struct in6_addr));
+			*offset += sizeof(struct in6_addr);
 		}
-
-
-       	}else{
-
-		if(reply->d.d66.LOC_AFI == 2){
-			printf("COUNT = %d, EID = IPv6, LOC = IPv6\n", reply->h.REC_COUNT);
-
-			norder(reply->d.d66.EID_PREFIX, 16);
-			norder(reply->d.d66.LOCATOR, 16);
-			printf("EID prefix is %d\n", reply->d.d66.EID_MASKLEN);
-
-			memcpy(result_rloc, reply->d.d66.LOCATOR, 16);
-			memcpy(result_eid, reply->d.d66.EID_PREFIX, 16);
-			result_prefix = reply->d.d66.EID_MASKLEN;
-			result_af = 2;
-			result_ttl = reply->d.d66.TTL;
-		}else{
-			printf("COUNT = %d, EID = IPv6, LOC = IPv4\n", reply->h.REC_COUNT);
-
-			norder(reply->d.d64.EID_PREFIX, 16);
-			norder(reply->d.d64.LOCATOR, 4);
-			printf("EID prefix is %d\n", reply->d.d64.EID_MASKLEN);
-
-			memcpy(result_rloc, reply->d.d64.LOCATOR, 4);
-			memcpy(result_eid, reply->d.d64.EID_PREFIX, 16);
-			result_prefix = reply->d.d64.EID_MASKLEN;
-			result_af = 1;
-			result_ttl = reply->d.d64.TTL;
-		}
-
-
-
-                if(ipv6_rem_list_by_nonce(reply->h.NONCE)){
-                        printf("removed temporary route and registered parmanent route\n");
-
-                        regist_prefix(2, result_eid, result_prefix, result_rloc, result_af);
-
-                        /* regist route info */
-                        struct info *newroute = malloc(sizeof(struct info));
-                        memset(newroute, 0, sizeof(struct info));
-                        memcpy(newroute->address, result_eid, 16);
-                        newroute->state = STATE_TTL;
-                        newroute->prefix = result_prefix;
-                        newroute->ttl = result_ttl * 60;
-                        ipv6_add_list(newroute);
-                }
 	}
+
+	return 0;
 }
 
-void ipv4_receive_reply(char *buf, int readsize){
-        struct rep_mes *reply;
+int regist_temporary_cache_by_request(char *buf, struct record *request_dest){
+	struct map_request_header *header = (struct map_request_header *)buf;
+	struct record *ptr = request_dest;
 
-        char result_eid[16];
-        char result_rloc[16];
-        int result_prefix;
-        int result_af;
-        int result_num;
-        int result_ttl;
+        while(ptr->next != NULL){
+                ptr = ptr->next;
+		/* regist temporary route info */
+		struct info *newroute = malloc(sizeof(struct info));
+		memset(newroute, 0, sizeof(struct info));
 
-        memset(result_eid, 0, 16);
-        memset(result_rloc, 0, 16);
-    	reply = (struct rep_mes *)buf;
+		memcpy(newroute->address, &ptr->address, 16);
+		memcpy(newroute->nonce, header->nonce, 8);
 
-       	if(reply->d.d46.ACT != 0){
-               	printf("Negative map-reply returned\n");
-               	result_prefix = reply->d.d46.EID_MASKLEN;
-               	result_ttl = reply->d.d46.TTL;
-               	norder(reply->d.d46.EID_PREFIX, 4);
-               	memcpy(result_eid, reply->d.d46.EID_PREFIX, 4);
-
-
-                if(ipv4_rem_list_by_nonce(reply->h.NONCE)){
- 	               printf("removed temporary route and registered parmanent route\n");
-
-                        /* negative cache is returned */
-                        printf("regist negative cache prefix = %d\n", result_prefix);
-                        regist_prefix(1, result_eid, result_prefix, result_rloc, 0);
-
-                        /* regist route info */
-                        struct info *newroute = malloc(sizeof(struct info));
-                        memset(newroute, 0, sizeof(struct info));
-                        memcpy(newroute->address, result_eid, 16);
-                        newroute->state = STATE_TTL;
-                        newroute->prefix = result_prefix;
-                        newroute->ttl = result_ttl * 60;
-                        ipv4_add_list(newroute);
-                }
-
-	}else{
-
-	       	if(reply->d.d46.LOC_AFI == 2){
-			printf("COUNT = %d, EID = IPv4, LOC = IPv6\n", reply->h.REC_COUNT);
-
-                	norder(reply->d.d46.EID_PREFIX, 4);
-			norder(reply->d.d46.LOCATOR, 16);
-                	printf("EID prefix is %d\n", reply->d.d46.EID_MASKLEN);
-
-                	memcpy(result_rloc, reply->d.d46.LOCATOR, 16);
-			memcpy(result_eid, reply->d.d46.EID_PREFIX, 4);
-			result_prefix = reply->d.d46.EID_MASKLEN;
-			result_af = 2;
-			result_ttl = reply->d.d46.TTL;
-       		}else{
-			printf("COUNT = %d, EID = IPv4, LOC = IPv4\n", reply->h.REC_COUNT);
-
-			norder(reply->d.d44.EID_PREFIX, 4);
-			norder(reply->d.d44.LOCATOR, 4);
-			printf("EID prefix is %d\n", reply->d.d44.EID_MASKLEN);
-
-			memcpy(result_rloc, reply->d.d44.LOCATOR, 4);
-			memcpy(result_eid, reply->d.d44.EID_PREFIX, 4);
-			result_prefix = reply->d.d44.EID_MASKLEN;
-			result_af = 1;
-			result_ttl = reply->d.d44.TTL;
-       		}
-
-                if(ipv4_rem_list_by_nonce(reply->h.NONCE)){
-			printf("removed temporary route and registered parmanent route\n");
-
-                        regist_prefix(1, result_eid, result_prefix, result_rloc, result_af);
-
-                        /* regist route info */
-			struct info *newroute = malloc(sizeof(struct info));
-			memset(newroute, 0, sizeof(struct info));
-			memcpy(newroute->address, result_eid, 16);
-			newroute->state = STATE_TTL;
-			newroute->prefix = result_prefix;
-			newroute->ttl = result_ttl * 60;
+		newroute->state = STATE_NONCE;
+		newroute->prefix = ptr->prefix;
+		newroute->ttl = default_ttl * 60;
+		newroute->af = 0;
+		if(ptr->af == AF_INET){
 			ipv4_add_list(newroute);
-                }
+		}else if(ptr->af == AF_INET6){
+			ipv6_add_list(newroute);
+		}
 	}
+}
+
+int create_map_request(char *buffer, struct record *request_source, struct record *request_dest){
+	int offset = 0;
+	int record_count = 0;
+	int ipv6_no_rloc = 0;
+	int ipv4_no_rloc = 0;
+
+	struct record rloc_record;	
+	memset(&rloc_record, 0, sizeof(struct record));
+
+        /* read rloc config */
+        struct config *rloc_config = (struct config *)config_root.under_layers[RLOC_LAYER];
+        if(rloc_config == NULL){
+                warn("no rloc configured");
+                return;
+        }
+        struct rloc_layer_data *rloc_data = (struct rloc_layer_data *)(rloc_config->data);
+
+        struct address_list *addr_list = &(rloc_data->v6address);
+        if(addr_list->next != NULL){
+                do{
+                        addr_list = addr_list->next;
+
+                        char address[16];
+                        inet_pton(AF_INET6, addr_list->address, address);
+
+                        add_record(&rloc_record, AF_INET6, 128, address, NULL);
+                }while(addr_list->next != NULL);
+        }else{  
+                ipv6_no_rloc = 1;
+        }
+
+        addr_list = &(rloc_data->v4address);
+        if(addr_list->next != NULL){
+                do{
+                        addr_list = addr_list->next;
+
+                        char address[4];
+                        inet_pton(AF_INET, addr_list->address, address);
+
+                        add_record(&rloc_record, AF_INET, 32, address, NULL);
+                }while(addr_list->next != NULL);
+        }else{  
+                ipv4_no_rloc = 1;
+        }
+
+        if(ipv4_no_rloc == 1 && ipv6_no_rloc == 1){
+                warn("no rloc configured");
+                return;
+        }
+
+	if(create_map_request_header(&offset, buffer, request_dest, &rloc_record) < 0){
+		return -1;
+	}
+
+	/* TODO: request_source is client's address in draft. 
+	 * now this is altered by rloc address. implement this! */
+	//if(create_map_request_source_eid(&offset, buffer, request_source) < 0){
+	if(create_map_request_source_eid(&offset, buffer, &rloc_record) < 0){
+		return -1;
+	}
+
+	if(create_map_request_rloc(&offset, buffer, &rloc_record) < 0){
+		return -1;
+	}
+
+	if(create_map_request_eid(&offset, buffer, request_dest) < 0){
+		return -1;
+	}
+
+	regist_temporary_cache_by_request(buffer, request_dest);
+	free_record(&rloc_record);
+
+	return offset;
+}
+
+int send_map_request(struct record *request_source, struct record *request_dest){
+	int send_size;
+	char buffer[MTU];
+	int ret = 0;
+	char *packet;
+	int packet_size;
+
+	memset(buffer, 0, sizeof(buffer));
+
+	ret = create_map_request(buffer, request_source, request_dest);
+	if(ret < 0){
+		return -1;
+	}
+
+	struct sockaddr_storage dest;
+	memset(&dest, 0, sizeof(struct sockaddr_storage));
+	int sockaddr_size;
+
+	if(control_version == 6){
+		struct sockaddr_in6 *dest6 = (struct sockaddr_in6 *)&dest;
+
+                struct config *mapresolver_config = (struct config *)config_root.under_layers[MAPRESOLVER_LAYER];
+                if(mapresolver_config == NULL){
+                        warn("no ipv6 map-resolver configured");
+			return -1;
+                }
+                struct mapresolver_layer_data *mapresolver_data = (struct mapresolver_layer_data *)(mapresolver_config->data);
+                struct address_list *addr_list = &(mapresolver_data->v6address);
+                addr_list = addr_list->next;
+                if(addr_list == NULL){
+                        warn("no ipv6 map-resolver configured");
+			return -1;
+                }
+
+		dest6->sin6_family = AF_INET6;
+		dest6->sin6_port = htons(4342);
+		inet_pton(AF_INET6, addr_list->address, &(dest6->sin6_addr));
+		sockaddr_size = sizeof(struct sockaddr_in6);
+	}else if(control_version == 4){
+                struct sockaddr_in *dest4 = (struct sockaddr_in *)&dest;
+
+                struct config *mapresolver_config = (struct config *)config_root.under_layers[MAPRESOLVER_LAYER];
+                if(mapresolver_config == NULL){
+                        warn("no ipv4 map-resolver configured");
+                        return -1;
+                }
+                struct mapresolver_layer_data *mapresolver_data = (struct mapresolver_layer_data *)(mapresolver_config->data);
+                struct address_list *addr_list = &(mapresolver_data->v6address);
+                addr_list = addr_list->next;
+                if(addr_list == NULL){
+                        warn("no ipv4 map-resolver configured");
+                        return -1;
+                }
+
+                dest4->sin_family = AF_INET;
+                dest4->sin_port = htons(4342);
+                inet_pton(AF_INET, addr_list->address, &(dest4->sin_addr));
+		sockaddr_size = sizeof(struct sockaddr_in);
+	}
+
+	packet =  encapsulate_map_request(buffer, ret, &packet_size);
+	send_size = sendto(udp_sock, packet, packet_size, 0, (struct sockaddr *)&dest, sockaddr_size);
+	if(send_size == -1){
+		err(EXIT_FAILURE, "send");
+	}
+
+	syslog_write(LOG_INFO, "map-request: message %d byte sent", send_size);
+
+	free(packet);
+
+	return 0;
 }
 
 void *ipv6_check_request_queue(void *arg){
@@ -411,8 +324,7 @@ void *ipv6_check_request_queue(void *arg){
 
 	/* initiate IPv6 map-request thread */
 	if(pthread_mutex_lock(&mutex_reqv6) != 0){
-		printf("pthread: map-request: lock failed\n");
-		exit(1);
+		err(EXIT_FAILURE, "pthread: map-request: lock failed");
 	}
 
 	while(1){
@@ -420,24 +332,26 @@ void *ipv6_check_request_queue(void *arg){
 
 			/* lock IPv6 queue mutex */
 			if(pthread_mutex_lock(&mutex_queuev6) != 0){
-				printf("pthread: queuev6: lock failed\n");
-				exit(1);
+				err(EXIT_FAILURE, "pthread: queuev6: lock failed");
 			}
 
 			dequeue(&ipv6_queue_start, destination);
 
 			/* unlock IPv6 queue mutex */
                         if(pthread_mutex_unlock(&mutex_queuev6) != 0){
-                                printf("pthread: queuev6: unlock failed\n");
-                                exit(1);
+				err(EXIT_FAILURE, "pthread: queuev6: unlock failed");
                         }
 
-			ipv6_send_map_request(destination, 128);
+                        struct record request_dest;
+                        memset(&request_dest, 0, sizeof(struct record));
+
+                        add_record(&request_dest, AF_INET6, 128, destination, NULL);
+
+                        send_map_request(NULL, &request_dest);
 		}else{
 			/* wait to next map-request */
 			if(pthread_cond_wait(&cond_reqv6, &mutex_reqv6) != 0){
-      				printf("pthread: map-request: wait failed\n");
-				exit(1);
+				err(EXIT_FAILURE, "pthread: map-request: wait failed");
 			}
 		}
 	}
@@ -448,8 +362,7 @@ void *ipv4_check_request_queue(void *arg){
 
 	/* initiate IPv4 map-request thread */
 	if(pthread_mutex_lock(&mutex_reqv4) != 0){
-		printf("pthread: map-request: lock failed\n");
-		exit(1);
+		err(EXIT_FAILURE, "pthread: map-request: lock failed");
 	}
 
 	while(1){
@@ -457,24 +370,26 @@ void *ipv4_check_request_queue(void *arg){
 
 			/* lock IPv4 queue mutex */
 			if(pthread_mutex_lock(&mutex_queuev4) != 0){
-				printf("pthread: queuev4: lock failed\n");
-				exit(1);
+				err(EXIT_FAILURE, "pthread: queuev4: lock failed");
 			}
 
 			dequeue(&ipv4_queue_start, destination);
 
 			/* unlock IPv4 queue mutex */
                         if(pthread_mutex_unlock(&mutex_queuev4) != 0){
-                                printf("pthread: queuev4: unlock failed\n");
-                                exit(1);
+				err(EXIT_FAILURE, "pthread: queuev4: unlock failed");
                         }
 
-			ipv4_send_map_request(destination, 32);
+			struct record request_dest;
+			memset(&request_dest, 0, sizeof(struct record));
+	
+			add_record(&request_dest, AF_INET, 32, destination, NULL);
+
+			send_map_request(NULL, &request_dest);
 		}else{
 			/* wait to next map-request */
 			if(pthread_cond_wait(&cond_reqv4, &mutex_reqv4) != 0){
-      				printf("pthread: map-request: wait failed\n");
-				exit(1);
+				err(EXIT_FAILURE, "pthread: map-request: wait failed");
 			}
 		}
 	}
