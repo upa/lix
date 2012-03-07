@@ -1,0 +1,34 @@
+#
+# lisp config file
+#
+
+eid {
+	v6prefix 2001:200:0:88a6::/64;
+	v4prefix 153.16.68.128/25;
+}
+
+rloc {
+	v6address 2001:200:0:8801:203:178:143:97;
+	v4address 203.178.143.97;
+}
+
+map-server {
+	v6address 2001:200:0:1005:203:178:139:68;
+	v4address 203.178.139.68;
+}
+
+map-resolver {
+	v6address 2001:200:0:1005:203:178:139:68;
+	v4address 203.178.139.68;
+}
+
+map-cache {
+	v6static 2001:200:0:8801::/64 2001:200:0:8890::1;
+	v4static 203.178.143.0/24 203.178.143.84;
+}
+
+default-ttl 60;
+control-ip-version 6;
+send-map-register 1;
+authentication-key marutaka;
+syslog-facility local1;
